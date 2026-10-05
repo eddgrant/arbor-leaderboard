@@ -1,0 +1,113 @@
+name: Commit to main build and release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  main-build-and-release:
+    uses: ./.github/workflows/build-and-publish.yaml
+    permissions:
+      contents: write
+    with:
+      push_latest: true
+    secrets:
+      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
+      docker_hub_password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+  comment-docker-image:
+    needs: main-build-and-release
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Find merged PR
+        id: find-pr
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+            const merged = prs.find(pr => pr.merged_at);
+            if (merged) {
+              core.setOutput('pr_number', merged.number);
+              core.info(`Found merged PR #${merged.number}`);
+            } else {
+              core.warning('No merged PR found for this commit');
+            }
+
+      - name: Comment Docker image details on PR
+        if: steps.find-pr.outputs.pr_number
+        uses: actions/github-script@v9
+        env:
+          IMAGE_VERSION: ${{ needs.main-build-and-release.outputs.version }}
+          PR_NUMBER: ${{ steps.find-pr.outputs.pr_number }}
+        with:
+          script: |
+            const version = process.env.IMAGE_VERSION;
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const image = 'eddgrant/arbor-leaderboard';
+            const marker = '<!-- docker-image-details -->';
+            const body = [
+              marker,
+              '### Docker Image Published (Release)',
+              '',
+              '| | |',
+              '|---|---|',
+              `| **Image** | \`${image}\` |`,
+              `| **Tag** | \`${version}\` |`,
+              `| **Latest** | :white_check_mark: \`latest\` tag updated |`,
+              `| **Pull** | \`docker pull ${image}:${version}\` |`,
+              '',
+              `[:link: View on Docker Hub](https://hub.docker.com/r/${image}/tags?name=${version})`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              core.info(`Updated existing comment ${existing.id}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+              core.info(`Created new comment on PR #${prNumber}`);
+            }
+
+  update-docker-hub-documentation:
+    needs: main-build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Docker Hub Documentation
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+          repository: eddgrant/arbor-leaderboard
+          short-description: Reads school meal accounts from the Arbor parent portal and publishes them to Home Assistant via MQTT.
+          enable-url-completion: true
