@@ -25,7 +25,7 @@ export ARBOR_PASSWORD="$(op read 'op://<vault>/Arbor/password')"
 cargo run --release -- --once
 ```
 
-Add `--once` to run a single sync and exit. Without `MQTT_HOST`, the figures are printed as JSON instead of published.
+`--once` runs a single sync and exits; without it the service keeps syncing every `FETCH_INTERVAL_MINUTES`. Without `MQTT_HOST`, the figures are printed as JSON instead of published.
 
 ## Configuration
 
