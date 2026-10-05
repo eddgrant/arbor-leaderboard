@@ -103,13 +103,30 @@ async fn run_once(
             today,
             s.term_start,
             config.target_balance_pence,
+            &config.categories,
         )?);
     }
 
     match publisher {
         Some(publisher) => {
+            let category_sensors: Vec<String> = config
+                .categories
+                .iter()
+                .map(mqtt::category_sensor_key)
+                .collect();
             for stats in &all_stats {
-                publisher.publish_child(stats).await?;
+                publisher.publish_child(stats, &config.categories).await?;
+                for removed in
+                    store.replace_published_category_sensors(stats.account_id, &category_sensors)?
+                {
+                    tracing::info!(
+                        sensor = removed,
+                        "removing sensor for unconfigured category"
+                    );
+                    publisher
+                        .remove_child_sensor(stats.account_id, &removed)
+                        .await?;
+                }
             }
             publisher.publish_last_success(Utc::now()).await?;
             tracing::info!(children = all_stats.len(), "published to MQTT");

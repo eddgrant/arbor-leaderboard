@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS day_totals (
     total_pence INTEGER NOT NULL,
     PRIMARY KEY (account_id, date)
 );
+-- Category sensors last published to Home Assistant per account, so sensors for categories
+-- that are no longer configured can be removed.
+CREATE TABLE IF NOT EXISTS published_category_sensors (
+    account_id INTEGER NOT NULL,
+    sensor_key TEXT    NOT NULL,
+    PRIMARY KEY (account_id, sensor_key)
+);
 CREATE TABLE IF NOT EXISTS purchases (
     account_id  INTEGER NOT NULL REFERENCES accounts(account_id),
     date        TEXT    NOT NULL,
@@ -128,6 +135,38 @@ impl Store {
         Ok(())
     }
 
+    /// Records the category sensors now published for an account, returning the ones that were
+    /// published before but aren't any more.
+    pub fn replace_published_category_sensors(
+        &mut self,
+        account_id: u64,
+        sensor_keys: &[String],
+    ) -> Result<Vec<String>> {
+        let tx = self.conn.transaction()?;
+        let previous: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT sensor_key FROM published_category_sensors WHERE account_id = ?1",
+            )?;
+            stmt.query_map(params![account_id as i64], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        tx.execute(
+            "DELETE FROM published_category_sensors WHERE account_id = ?1",
+            params![account_id as i64],
+        )?;
+        for key in sensor_keys {
+            tx.execute(
+                "INSERT INTO published_category_sensors (account_id, sensor_key) VALUES (?1, ?2)",
+                params![account_id as i64, key],
+            )?;
+        }
+        tx.commit()?;
+        Ok(previous
+            .into_iter()
+            .filter(|k| !sensor_keys.contains(k))
+            .collect())
+    }
+
     /// Purchases for an account with dates in `from..=to`, oldest first.
     pub fn purchases_between(
         &self,
@@ -226,6 +265,29 @@ mod tests {
             .map(|p| p.purchase.name)
             .collect();
         assert_eq!(got, ["a", "b"]);
+    }
+
+    #[test]
+    fn reports_category_sensors_that_are_no_longer_published() {
+        let mut store = store_with_account();
+        let keys = |k: &[&str]| k.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        assert!(
+            store
+                .replace_published_category_sensors(1, &keys(&["term_puddings", "term_drinks"]))
+                .unwrap()
+                .is_empty()
+        );
+        let removed = store
+            .replace_published_category_sensors(1, &keys(&["term_puddings", "term_pizza"]))
+            .unwrap();
+        assert_eq!(removed, ["term_drinks"]);
+        assert!(
+            store
+                .replace_published_category_sensors(1, &keys(&["term_puddings", "term_pizza"]))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ If your children's school uses [Arbor](https://arbor-education.com/) for lunch m
 - **know how much to top up:** a sensor per child shows the top-up needed to bring their balance back to your chosen target. Pair it with a Home Assistant automation for a phone notification before the school week.
 - **see what they spend:** balance, spend this week and this term, and what they bought on their last school day.
 - **spot problems early:** alert when a balance goes negative, or when the service can't reach Arbor.
-- **make it a game:** a family leaderboard for most puddings, most drinks, or biggest spender this term.
+- **make it a game:** a family leaderboard for most puddings, most drinks, biggest spender, or any category of food you define.
 
 It runs as a small, self-hosted service (a ~5 MB binary using under 10 MB of memory), keeps the purchase history in a local SQLite database, and talks to Home Assistant over MQTT. Your data stays on your own hardware.
 
@@ -48,7 +48,8 @@ Each child is a device with these sensors:
 | Balance | £3.40 |
 | Top-up needed | £11.60 (to reach `TARGET_BALANCE`) |
 | Spend this week, Spend this term | £5.20, £64.55 |
-| Items, Puddings, Drinks this term | 34, 9, 5 |
+| Items this term | 34 |
+| *Category* this term, one per category | Puddings 9, Drinks 5 |
 | Last purchase | the date, with that day's items in an `items` attribute |
 
 A separate "Arbor leaderboard" device has a **Last successful fetch** timestamp, so you can be alerted if the service stops being able to read Arbor, for example after a password change.
@@ -78,9 +79,32 @@ automation:
 
 The [`homeassistant/`](homeassistant/) folder will collect ready-made automations and dashboards.
 
-### Puddings and drinks
+### Categories: puddings, drinks, or anything you like
 
-Till item names are free text, so items are counted as puddings or drinks by keyword (for example "traybake", "cupcake", "milkshake", "slushies"). The lists are in [`service/src/categories.rs`](service/src/categories.rs); contributions for items your school sells are welcome.
+Each child gets a "*Category* this term" sensor for every item category, counting the items this term whose name contains one of the category's keywords. Till item names are free text ("traybake", "milkshake 1.05"), so keywords are matched case-insensitively anywhere in the name, and an item can count in more than one category.
+
+The built-in categories are **puddings** and **drinks** (see [`service/src/categories.default.yaml`](service/src/categories.default.yaml)). To use your own, write a YAML file and point `CATEGORIES_FILE` at it:
+
+```yaml
+categories:
+  puddings:
+    icon: mdi:cupcake          # optional Material Design icon
+    keywords: [traybake, cupcake, cookie, brownie, waffle]
+  drinks: [milkshake, slush, water, juice]
+  pizza: [pizza]
+  healthy:
+    icon: mdi:food-apple
+    keywords: [fruit, salad, veggie]
+```
+
+A category is either a list of keywords or an object with `keywords` and an optional `icon`. Its name becomes the sensor name ("Pizza this term") and entity ID (`sensor.arbor_<child>_pizza_this_term`). Remove a category and its sensors are removed from Home Assistant on the next sync. The service won't start if the file is invalid, and says why.
+
+With Docker, mount the file and set the variable:
+
+```sh
+  -v ./categories.yaml:/config/categories.yaml:ro \
+  -e CATEGORIES_FILE=/config/categories.yaml \
+```
 
 ## Configuration
 
@@ -95,6 +119,7 @@ Till item names are free text, so items are counted as puddings or drinks by key
 | `DB_PATH` | `/data/arbor.db` in the image, `arbor.db` otherwise | SQLite file holding balances and purchase history; keep it on a persistent volume |
 | `FETCH_INTERVAL_MINUTES` | `120` | Time between syncs. Please keep this modest, to be gentle with Arbor |
 | `HTTP_PORT` | `8080` | Port for `/health` |
+| `CATEGORIES_FILE` | built-in puddings and drinks | YAML file of item categories; see [Categories](#categories-puddings-drinks-or-anything-you-like) |
 
 Treat your Arbor password like any other secret: use your platform's secret store (Docker secrets, Kubernetes Secrets, a password manager's CLI) rather than typing it into shell history.
 
@@ -109,7 +134,7 @@ Treat your Arbor password like any other secret: use your platform's secret stor
 3. For each day of the current term, reads that day's purchases, skipping days already stored whose total hasn't changed. After the first run, a sync needs only a handful of requests.
 4. Calculates each child's figures from the stored history and publishes them to Home Assistant using MQTT discovery, so no Home Assistant YAML is needed for the sensors.
 
-Arbor only shows the current term, so the local database is what keeps history across terms.
+"This term" starts on the first day Arbor lists for the current term. Arbor only shows the current term and resets the list when a new one begins, so term figures read zero until a child's first purchase of the new term, and the local database is what keeps history across terms.
 
 ## Repository layout
 

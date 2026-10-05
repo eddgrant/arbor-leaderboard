@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
+use crate::categories::Categories;
 use crate::money::parse_pence;
 use crate::mqtt::MqttConfig;
 
@@ -20,6 +21,8 @@ pub struct Config {
     pub target_balance_pence: i64,
     /// Port for the `/health` endpoint. Not served with `--once`.
     pub http_port: u16,
+    /// From `CATEGORIES_FILE`, or the built-in defaults.
+    pub categories: Categories,
 }
 
 impl Config {
@@ -44,6 +47,9 @@ impl Config {
             fetch_interval: Duration::from_secs(60 * parsed("FETCH_INTERVAL_MINUTES", 120)?),
             target_balance_pence: target_balance_pence(optional("TARGET_BALANCE"))?,
             http_port: parsed("HTTP_PORT", 8080)?,
+            categories: Categories::load(
+                optional("CATEGORIES_FILE").map(PathBuf::from).as_deref(),
+            )?,
         })
     }
 }

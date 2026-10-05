@@ -2,10 +2,11 @@
 
 use anyhow::Result;
 use chrono::{Datelike, Days, NaiveDate};
+use indexmap::IndexMap;
 use serde::Serialize;
 
 use crate::arbor::MealAccount;
-use crate::categories::{Category, categorise};
+use crate::categories::Categories;
 use crate::store::Store;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -18,8 +19,8 @@ pub struct ChildStats {
     pub week_spend: f64,
     pub term_spend: f64,
     pub term_items: usize,
-    pub term_puddings: usize,
-    pub term_drinks: usize,
+    /// Items this term in each configured category, keyed by category key.
+    pub categories: IndexMap<String, usize>,
     pub last_purchase_date: Option<NaiveDate>,
     pub last_purchase_items: Vec<String>,
 }
@@ -31,6 +32,7 @@ pub fn child_stats(
     today: NaiveDate,
     term_start: NaiveDate,
     target_balance_pence: i64,
+    categories: &Categories,
 ) -> Result<ChildStats> {
     let week_start = today - Days::new(u64::from(today.weekday().num_days_from_monday()));
     let term = store.purchases_between(account.account_id, term_start, today)?;
@@ -40,11 +42,13 @@ pub fn child_stats(
         .filter(|p| p.date >= week_start)
         .map(|p| p.purchase.price_pence)
         .sum();
-    let count = |c: Category| {
-        term.iter()
-            .filter(|p| categorise(&p.purchase.name) == c)
-            .count()
-    };
+    let category_counts = categories
+        .iter()
+        .map(|c| {
+            let count = term.iter().filter(|p| c.matches(&p.purchase.name)).count();
+            (c.key.clone(), count)
+        })
+        .collect();
     let last_purchase_date = term.last().map(|p| p.date);
     let last_purchase_items = term
         .iter()
@@ -60,8 +64,7 @@ pub fn child_stats(
         week_spend: pounds(week_spend),
         term_spend: pounds(term.iter().map(|p| p.purchase.price_pence).sum()),
         term_items: term.len(),
-        term_puddings: count(Category::Pudding),
-        term_drinks: count(Category::Drink),
+        categories: category_counts,
         last_purchase_date,
         last_purchase_items,
     })
@@ -118,15 +121,23 @@ mod tests {
             )
             .unwrap();
 
-        let stats = child_stats(&store, &account, date(10, 7), date(9, 1), 1600).unwrap();
+        let stats = child_stats(
+            &store,
+            &account,
+            date(10, 7),
+            date(9, 1),
+            1600,
+            &Categories::load(None).unwrap(),
+        )
+        .unwrap();
 
         assert_eq!(stats.balance, 3.40);
         assert_eq!(stats.top_up, 12.60);
         assert_eq!(stats.week_spend, 5.20);
         assert_eq!(stats.term_spend, 9.35);
         assert_eq!(stats.term_items, 5);
-        assert_eq!(stats.term_puddings, 2);
-        assert_eq!(stats.term_drinks, 1);
+        assert_eq!(stats.categories["puddings"], 2);
+        assert_eq!(stats.categories["drinks"], 1);
         assert_eq!(stats.last_purchase_date, Some(date(10, 6)));
         assert_eq!(stats.last_purchase_items, ["cupcake", "milkshake 1.05"]);
     }
@@ -141,7 +152,15 @@ mod tests {
         };
         store.record_balance(&account, Utc::now()).unwrap();
 
-        let stats = child_stats(&store, &account, date(10, 4), date(9, 1), 1600).unwrap();
+        let stats = child_stats(
+            &store,
+            &account,
+            date(10, 4),
+            date(9, 1),
+            1600,
+            &Categories::load(None).unwrap(),
+        )
+        .unwrap();
         assert_eq!(stats.top_up, 0.0);
         assert_eq!(stats.last_purchase_date, None);
     }
