@@ -1,0 +1,3 @@
+/service/target/
+.env
+*.local.env
