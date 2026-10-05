@@ -1,9 +1,13 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
+use crate::money::parse_pence;
 use crate::mqtt::MqttConfig;
+
+/// Default balance each meal account is topped up to: £16.
+const DEFAULT_TARGET_BALANCE_PENCE: i64 = 1600;
 
 pub struct Config {
     pub arbor_base_url: String,
@@ -14,6 +18,8 @@ pub struct Config {
     pub mqtt: Option<MqttConfig>,
     pub fetch_interval: Duration,
     pub target_balance_pence: i64,
+    /// Port for the `/health` endpoint. Not served with `--once`.
+    pub http_port: u16,
 }
 
 impl Config {
@@ -36,13 +42,25 @@ impl Config {
                 .into(),
             mqtt,
             fetch_interval: Duration::from_secs(60 * parsed("FETCH_INTERVAL_MINUTES", 120)?),
-            target_balance_pence: parsed("TARGET_BALANCE_PENCE", 1600)?,
+            target_balance_pence: target_balance_pence(optional("TARGET_BALANCE"))?,
+            http_port: parsed("HTTP_PORT", 8080)?,
         })
     }
 }
 
 fn required(name: &str) -> Result<String> {
     std::env::var(name).with_context(|| format!("environment variable {name} is not set"))
+}
+
+/// Parses `TARGET_BALANCE`, given in pounds such as "16", "12.50" or "£16".
+fn target_balance_pence(value: Option<String>) -> Result<i64> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_TARGET_BALANCE_PENCE);
+    };
+    match parse_pence(&value) {
+        Some(pence) if pence > 0 => Ok(pence),
+        _ => bail!("TARGET_BALANCE must be an amount in pounds such as 16 or 12.50, not {value:?}"),
+    }
 }
 
 fn optional(name: &str) -> Option<String> {
@@ -58,5 +76,21 @@ where
             .parse()
             .with_context(|| format!("{name} has an invalid value: {v}")),
         None => Ok(default),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::target_balance_pence;
+
+    #[test]
+    fn target_balance_is_given_in_pounds() {
+        assert_eq!(target_balance_pence(None).unwrap(), 1600);
+        assert_eq!(target_balance_pence(Some("20".into())).unwrap(), 2000);
+        assert_eq!(target_balance_pence(Some("12.50".into())).unwrap(), 1250);
+        assert_eq!(target_balance_pence(Some("£16".into())).unwrap(), 1600);
+        assert!(target_balance_pence(Some("lots".into())).is_err());
+        assert!(target_balance_pence(Some("0".into())).is_err());
+        assert!(target_balance_pence(Some("-5".into())).is_err());
     }
 }
