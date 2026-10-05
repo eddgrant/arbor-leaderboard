@@ -1,31 +1,22 @@
 mod arbor;
+mod categories;
+mod config;
 mod money;
+mod mqtt;
+mod stats;
+mod store;
+mod sync;
 
-use anyhow::{Context, Result};
-use chrono::NaiveDate;
-use serde::Serialize;
+use anyhow::Result;
+use chrono::{NaiveDate, Utc};
+use chrono_tz::Europe::London;
 use tracing_subscriber::EnvFilter;
 
-use arbor::{ArborClient, Purchase};
-
-/// Each child's meal account is topped up to this balance every week.
-const TARGET_BALANCE_PENCE: i64 = 1600;
-
-#[derive(Serialize)]
-struct ChildSnapshot {
-    student: String,
-    account_id: u64,
-    balance_pence: i64,
-    top_up_pence: i64,
-    days: Vec<DaySnapshot>,
-}
-
-#[derive(Serialize)]
-struct DaySnapshot {
-    date: NaiveDate,
-    total_pence: i64,
-    purchases: Vec<Purchase>,
-}
+use arbor::ArborClient;
+use config::Config;
+use mqtt::Publisher;
+use stats::{ChildStats, child_stats};
+use store::Store;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -36,41 +27,87 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let base_url = env("ARBOR_BASE_URL")?;
-    let email = env("ARBOR_EMAIL")?;
-    let password = env("ARBOR_PASSWORD")?;
+    let once = std::env::args().any(|a| a == "--once");
+    let config = Config::from_env()?;
+    let client = ArborClient::new(&config.arbor_base_url)?;
+    let mut store = Store::open(&config.db_path)?;
+    let publisher = match &config.mqtt {
+        Some(mqtt) => Some(Publisher::connect(mqtt).await?),
+        None => None,
+    };
 
-    let client = ArborClient::new(base_url)?;
-    client.login(&email, &password).await?;
-    tracing::info!("logged in to Arbor");
-
-    let mut snapshot = Vec::new();
-    for account in client.meal_accounts().await? {
-        let mut days = Vec::new();
-        for day in client.day_spends(account.account_id).await? {
-            let purchases = client.purchases(account.account_id, day.date).await?;
-            days.push(DaySnapshot {
-                date: day.date,
-                total_pence: day.total_pence,
-                purchases,
-            });
-            // Be gentle with Arbor: these are one request per day of the term.
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    loop {
+        match run_once(&config, &client, &mut store, publisher.as_ref()).await {
+            Ok(()) => {}
+            // A failed fetch leaves "Last successful fetch" stale, which Home Assistant can alert on.
+            Err(e) if !once => tracing::error!(error = format!("{e:#}"), "fetch failed"),
+            Err(e) => return Err(e),
         }
-        tracing::info!(student = %account.student, balance_pence = account.balance_pence, days = days.len(), "read account");
-        snapshot.push(ChildSnapshot {
-            top_up_pence: (TARGET_BALANCE_PENCE - account.balance_pence).max(0),
-            student: account.student,
-            account_id: account.account_id,
-            balance_pence: account.balance_pence,
-            days,
-        });
+        if once {
+            break;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(config.fetch_interval) => {}
+            _ = shutdown_signal() => break,
+        }
     }
 
-    println!("{}", serde_json::to_string_pretty(&snapshot)?);
+    if let Some(publisher) = publisher {
+        publisher.shutdown().await;
+    }
     Ok(())
 }
 
-fn env(name: &str) -> Result<String> {
-    std::env::var(name).with_context(|| format!("environment variable {name} is not set"))
+async fn run_once(
+    config: &Config,
+    client: &ArborClient,
+    store: &mut Store,
+    publisher: Option<&Publisher>,
+) -> Result<()> {
+    let today = today_in_london();
+    let synced = sync::sync(
+        client,
+        store,
+        &config.arbor_email,
+        &config.arbor_password,
+        today,
+    )
+    .await?;
+
+    let mut all_stats: Vec<ChildStats> = Vec::new();
+    for s in &synced {
+        all_stats.push(child_stats(
+            store,
+            &s.account,
+            today,
+            s.term_start,
+            config.target_balance_pence,
+        )?);
+    }
+
+    match publisher {
+        Some(publisher) => {
+            for stats in &all_stats {
+                publisher.publish_child(stats).await?;
+            }
+            publisher.publish_last_success(Utc::now()).await?;
+            tracing::info!(children = all_stats.len(), "published to MQTT");
+        }
+        None => println!("{}", serde_json::to_string_pretty(&all_stats)?),
+    }
+    Ok(())
+}
+
+fn today_in_london() -> NaiveDate {
+    Utc::now().with_timezone(&London).date_naive()
+}
+
+async fn shutdown_signal() {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("installing SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+    }
+    tracing::info!("shutting down");
 }
