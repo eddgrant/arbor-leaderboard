@@ -2,3 +2,6 @@
 .env
 *.local.env
 snapshot*.json
+*.db
+*.db-wal
+*.db-shm
