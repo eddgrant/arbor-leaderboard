@@ -1,5 +1,5 @@
 # Build in CI or on a fast machine; compiling Rust on a small home server can be slow.
-FROM rust:1.96-bookworm AS build
+FROM rust:1.97-bookworm AS build
 WORKDIR /src
 # Cache dependency builds separately from the application source.
 COPY Cargo.toml Cargo.lock ./
