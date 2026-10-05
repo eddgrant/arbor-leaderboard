@@ -22,10 +22,27 @@ cd service
 export ARBOR_BASE_URL=https://<school>.uk.arbor.sc
 export ARBOR_EMAIL=you@example.com
 export ARBOR_PASSWORD="$(op read 'op://<vault>/Arbor/password')"
-cargo run --release > snapshot.json
+cargo run --release -- --once
 ```
 
-This prints a JSON snapshot: each child's balance, the top-up needed, and every purchase this term.
+Add `--once` to run a single sync and exit. Without `MQTT_HOST`, the figures are printed as JSON instead of published.
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ARBOR_BASE_URL` | required | The school's Arbor address |
+| `ARBOR_EMAIL`, `ARBOR_PASSWORD` | required | Guardian login |
+| `DB_PATH` | `arbor.db` | SQLite file holding balances and purchase history |
+| `MQTT_HOST` | unset | Broker for Home Assistant; unset prints JSON instead |
+| `MQTT_PORT` | `1883` | |
+| `MQTT_USERNAME`, `MQTT_PASSWORD` | unset | Broker login, if it needs one |
+| `FETCH_INTERVAL_MINUTES` | `120` | Time between syncs |
+| `TARGET_BALANCE_PENCE` | `1600` | Balance each account is topped up to |
+
+## Home Assistant entities
+
+Each child appears as a device, "Arbor <name>", with sensors for balance, top-up needed, spend this week and this term, items, puddings and drinks this term, and last purchase date (with that day's items as an `items` attribute). A separate "Arbor leaderboard" device has a "Last successful fetch" timestamp, for alerting when fetches stop working.
 
 ## Tests
 
