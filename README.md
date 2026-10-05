@@ -39,6 +39,11 @@ cargo run --release -- --once
 | `MQTT_USERNAME`, `MQTT_PASSWORD` | unset | Broker login, if it needs one |
 | `FETCH_INTERVAL_MINUTES` | `120` | Time between syncs |
 | `TARGET_BALANCE_PENCE` | `1600` | Balance each account is topped up to |
+| `HTTP_PORT` | `8080` | Port for `/health` (not served with `--once`) |
+
+## Health
+
+`GET /health` returns `200` while the sync loop is making progress and `503` if no cycle has finished within the fetch interval plus 15 minutes. Arbor failures don't make it unhealthy, since a restart wouldn't fix them; they appear in the response's `last_error` field, and as a stale "Last successful fetch" in Home Assistant.
 
 ## Home Assistant entities
 
