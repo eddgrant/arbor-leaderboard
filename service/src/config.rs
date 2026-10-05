@@ -14,6 +14,8 @@ pub struct Config {
     pub mqtt: Option<MqttConfig>,
     pub fetch_interval: Duration,
     pub target_balance_pence: i64,
+    /// Port for the `/health` endpoint. Not served with `--once`.
+    pub http_port: u16,
 }
 
 impl Config {
@@ -37,6 +39,7 @@ impl Config {
             mqtt,
             fetch_interval: Duration::from_secs(60 * parsed("FETCH_INTERVAL_MINUTES", 120)?),
             target_balance_pence: parsed("TARGET_BALANCE_PENCE", 1600)?,
+            http_port: parsed("HTTP_PORT", 8080)?,
         })
     }
 }

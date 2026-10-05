@@ -1,11 +1,14 @@
 mod arbor;
 mod categories;
 mod config;
+mod health;
 mod money;
 mod mqtt;
 mod stats;
 mod store;
 mod sync;
+
+use std::io::IsTerminal;
 
 use anyhow::Result;
 use chrono::{NaiveDate, Utc};
@@ -14,6 +17,7 @@ use tracing_subscriber::EnvFilter;
 
 use arbor::ArborClient;
 use config::Config;
+use health::Health;
 use mqtt::Publisher;
 use stats::{ChildStats, child_stats};
 use store::Store;
@@ -25,6 +29,7 @@ async fn main() -> Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
 
     let once = std::env::args().any(|a| a == "--once");
@@ -36,11 +41,27 @@ async fn main() -> Result<()> {
         None => None,
     };
 
+    let health = Health::new(config.fetch_interval);
+    if !once {
+        let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.http_port)).await?;
+        tracing::info!(port = config.http_port, "serving /health");
+        let app = health::router(health.clone());
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                tracing::error!(error = %e, "health server stopped");
+            }
+        });
+    }
+
     loop {
         match run_once(&config, &client, &mut store, publisher.as_ref()).await {
-            Ok(()) => {}
-            // A failed fetch leaves "Last successful fetch" stale, which Home Assistant can alert on.
-            Err(e) if !once => tracing::error!(error = format!("{e:#}"), "fetch failed"),
+            Ok(()) => health.record_success(Utc::now()),
+            Err(e) if !once => {
+                // A failed fetch leaves "Last successful fetch" stale, which Home Assistant can alert on.
+                let error = format!("{e:#}");
+                tracing::error!(error, "fetch failed");
+                health.record_failure(Utc::now(), error);
+            }
             Err(e) => return Err(e),
         }
         if once {
