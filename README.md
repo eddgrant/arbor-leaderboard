@@ -1,58 +1,131 @@
 # arbor-leaderboard
 
-Reads our children's school meal accounts from the [Arbor](https://arbor-education.com/) parent portal and surfaces them in Home Assistant:
+**Bring your children's school meal accounts into Home Assistant.**
 
-- a Sunday-evening phone notification saying how much to top up each account (to £16)
-- dashboard cards for balances, weekly spend and a leaderboard (most puddings, biggest spender, …)
+If your children's school uses [Arbor](https://arbor-education.com/) for lunch money, you probably top up each child's account through the Arbor parent portal or app, and only find out what they spent their money on if you go looking. arbor-leaderboard checks Arbor for you and publishes the figures to Home Assistant, so you can:
 
-Arbor has no API for parents, so the service uses the same requests as the portal's web pages: a JSON login, then page URLs with `?format=javascript`, which return each page as a JSON component tree.
+- **know how much to top up:** a sensor per child shows the top-up needed to bring their balance back to your chosen target. Pair it with a Home Assistant automation for a phone notification before the school week.
+- **see what they spend:** balance, spend this week and this term, and what they bought on their last school day.
+- **spot problems early:** alert when a balance goes negative, or when the service can't reach Arbor.
+- **make it a game:** a family leaderboard for most puddings, most drinks, or biggest spender this term.
 
-## Layout
+It runs as a small, self-hosted service (a ~5 MB binary using under 10 MB of memory), keeps the purchase history in a local SQLite database, and talks to Home Assistant over MQTT. Your data stays on your own hardware.
 
-| Path | What |
-|---|---|
-| `service/` | Rust service: fetches from Arbor, (soon) stores history in SQLite and publishes to MQTT for Home Assistant |
-| `deploy/k8s/` | Manifests for Fitlet's k3s cluster (`live` namespace) |
-| `homeassistant/` | Home Assistant package (automations, templates) and dashboard YAML |
+> **Unofficial.** This project isn't affiliated with or endorsed by Arbor Education. Arbor has no public API for parents, so the service signs in with your own parent portal login and reads the same pages the portal shows you. It only reads; it never makes payments. If Arbor changes its portal, the service may stop working until it's updated.
 
-## Running locally
+## What you need
+
+- An Arbor **parent portal login** for a school that uses Arbor for meal accounts.
+- **Home Assistant** with the [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) set up, and an MQTT broker such as Mosquitto.
+- Somewhere to run a container: Docker, Kubernetes, or anything similar.
+
+## Quick start
+
+Find your school's Arbor address: it's the address you see after signing in to the parent portal, for example `https://myschool.uk.arbor.sc`. Then run:
 
 ```sh
-cd service
-export ARBOR_BASE_URL=https://<school>.uk.arbor.sc
-export ARBOR_EMAIL=you@example.com
-export ARBOR_PASSWORD="$(op read 'op://<vault>/Arbor/password')"
-cargo run --release -- --once
+docker run -d --name arbor-leaderboard \
+  -e ARBOR_BASE_URL=https://myschool.uk.arbor.sc \
+  -e ARBOR_EMAIL=you@example.com \
+  -e ARBOR_PASSWORD='your-arbor-password' \
+  -e MQTT_HOST=192.168.1.10 \
+  -e TARGET_BALANCE=15 \
+  -v arbor-data:/data \
+  -p 8080:8080 \
+  eddgrant/arbor-leaderboard:latest
 ```
 
-`--once` runs a single sync and exits; without it the service keeps syncing every `FETCH_INTERVAL_MINUTES`. Without `MQTT_HOST`, the figures are printed as JSON instead of published.
+Within a minute or so, each child appears in Home Assistant under **Settings → Devices & services → MQTT** as a device called "Arbor *child's name*". The first sync reads the whole current term, so it takes longer than later ones.
+
+To try it without Home Assistant, leave out `MQTT_HOST` and add `--once` after the image name: the service syncs once, prints the figures as JSON and exits.
+
+## Home Assistant entities
+
+Each child is a device with these sensors:
+
+| Sensor | Example |
+|---|---|
+| Balance | £3.40 |
+| Top-up needed | £11.60 (to reach `TARGET_BALANCE`) |
+| Spend this week, Spend this term | £5.20, £64.55 |
+| Items, Puddings, Drinks this term | 34, 9, 5 |
+| Last purchase | the date, with that day's items in an `items` attribute |
+
+A separate "Arbor leaderboard" device has a **Last successful fetch** timestamp, so you can be alerted if the service stops being able to read Arbor, for example after a password change.
+
+All entities show as unavailable while the service is stopped.
+
+### Example: a weekly top-up reminder
+
+```yaml
+automation:
+  - alias: "School lunch top-up reminder"
+    triggers:
+      - trigger: time
+        at: "18:00:00"
+    conditions:
+      - condition: time
+        weekday: [sun]
+    actions:
+      - action: notify.mobile_app_your_phone
+        data:
+          title: "School lunch top-ups"
+          message: >
+            {% for s in states.sensor if s.entity_id is search('^sensor\.arbor_.+_top_up_needed$') %}
+            {{ s.name }}: £{{ s.state }}{{ ', ' if not loop.last }}
+            {% endfor %}
+```
+
+The [`homeassistant/`](homeassistant/) folder will collect ready-made automations and dashboards.
+
+### Puddings and drinks
+
+Till item names are free text, so items are counted as puddings or drinks by keyword (for example "traybake", "cupcake", "milkshake", "slushies"). The lists are in [`service/src/categories.rs`](service/src/categories.rs); contributions for items your school sells are welcome.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ARBOR_BASE_URL` | required | The school's Arbor address |
-| `ARBOR_EMAIL`, `ARBOR_PASSWORD` | required | Guardian login |
-| `DB_PATH` | `arbor.db` | SQLite file holding balances and purchase history |
-| `MQTT_HOST` | unset | Broker for Home Assistant; unset prints JSON instead |
+| `ARBOR_BASE_URL` | required | Your school's Arbor address |
+| `ARBOR_EMAIL`, `ARBOR_PASSWORD` | required | Your parent portal login |
+| `TARGET_BALANCE` | `16` | The balance, in pounds, you top each account up to, e.g. `15` or `12.50` |
+| `MQTT_HOST` | unset | MQTT broker used by Home Assistant; unset prints JSON instead |
 | `MQTT_PORT` | `1883` | |
-| `MQTT_USERNAME`, `MQTT_PASSWORD` | unset | Broker login, if it needs one |
-| `FETCH_INTERVAL_MINUTES` | `120` | Time between syncs |
-| `TARGET_BALANCE_PENCE` | `1600` | Balance each account is topped up to |
-| `HTTP_PORT` | `8080` | Port for `/health` (not served with `--once`) |
+| `MQTT_USERNAME`, `MQTT_PASSWORD` | unset | Broker login, if your broker needs one |
+| `DB_PATH` | `/data/arbor.db` in the image, `arbor.db` otherwise | SQLite file holding balances and purchase history; keep it on a persistent volume |
+| `FETCH_INTERVAL_MINUTES` | `120` | Time between syncs. Please keep this modest, to be gentle with Arbor |
+| `HTTP_PORT` | `8080` | Port for `/health` |
+
+Treat your Arbor password like any other secret: use your platform's secret store (Docker secrets, Kubernetes Secrets, a password manager's CLI) rather than typing it into shell history.
 
 ## Health
 
-`GET /health` returns `200` while the sync loop is making progress and `503` if no cycle has finished within the fetch interval plus 15 minutes. Arbor failures don't make it unhealthy, since a restart wouldn't fix them; they appear in the response's `last_error` field, and as a stale "Last successful fetch" in Home Assistant.
+`GET /health` returns `200` while the sync loop is making progress and `503` if no sync has finished within the fetch interval plus 15 minutes, which makes it suitable for liveness and readiness probes. Arbor failures, such as a rejected login, don't make it unhealthy, because restarting wouldn't fix them; they appear in the response's `last_error` field, and as a stale **Last successful fetch** in Home Assistant.
 
-## Home Assistant entities
+## How it works
 
-Each child appears as a device, "Arbor <name>", with sensors for balance, top-up needed, spend this week and this term, items, puddings and drinks this term, and last purchase date (with that day's items as an `items` attribute). A separate "Arbor leaderboard" device has a "Last successful fetch" timestamp, for alerting when fetches stop working.
+1. Signs in to Arbor with the same JSON login the parent portal uses.
+2. Reads each child's meal account balance from the guardian dashboard.
+3. For each day of the current term, reads that day's purchases, skipping days already stored whose total hasn't changed. After the first run, a sync needs only a handful of requests.
+4. Calculates each child's figures from the stored history and publishes them to Home Assistant using MQTT discovery, so no Home Assistant YAML is needed for the sensors.
 
-## Tests
+Arbor only shows the current term, so the local database is what keeps history across terms.
+
+## Repository layout
+
+| Path | What |
+|---|---|
+| `service/` | The Rust service and its Dockerfile |
+| `homeassistant/` | Example Home Assistant automations and dashboards |
+| `deploy/k8s/` | Notes for running on Kubernetes |
+
+## Development
 
 ```sh
-cd service && cargo test
+cd service
+cargo test
+ARBOR_BASE_URL=https://myschool.uk.arbor.sc ARBOR_EMAIL=you@example.com ARBOR_PASSWORD=... \
+  cargo run --release -- --once
 ```
 
-Parsers are tested against anonymised fixtures in `service/tests/fixtures/` that mirror Arbor's response shapes.
+Parsers are tested against anonymised fixtures in `service/tests/fixtures/` that mirror Arbor's response shapes. Please never commit real responses: they contain children's names and purchases.

@@ -1,4 +1,4 @@
-# Build on the workstation or in CI, not on Fitlet: its CPU is too slow to compile Rust comfortably.
+# Build in CI or on a fast machine; compiling Rust on a small home server can be slow.
 FROM rust:1.96-bookworm AS build
 WORKDIR /src
 # Cache dependency builds separately from the application source.
