@@ -1,3 +1,4 @@
 /service/target/
 .env
 *.local.env
+snapshot*.json
