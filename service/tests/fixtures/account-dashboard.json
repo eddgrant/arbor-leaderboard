@@ -1,0 +1,7 @@
+{"type":"page","content":[{"componentName":"Arbor.container.Column","type":"component","content":[
+ {"componentName":"Arbor.selector.PageToggle","xtype":"mis-page-toggle","props":{"fieldLabel":"Term","options":[{"label":"Autumn Term 2026","value":"/guardians/customer-account-ui/dashboard/customer-account-id/101/term-id/61","selected":true}]}},
+ {"componentName":"Arbor.container.Section","type":"component","xtype":"mis-section","props":{"title":"Week beginning 28 Sep 2026: £7.80"},"content":[
+  {"componentName":"Arbor.container.PropertyRow","xtype":"mis-property-row","props":{"cls":" mis-clickable","eventListener":{"action":"load-page","url":"/guardians/customer-account-ui/view-payments-on-date/date/2026-09-29/customer-account-id/101"},"value":"£4.15","url":"/guardians/customer-account-ui/view-payments-on-date/date/2026-09-29/customer-account-id/101","fieldLabel":"Tuesday"}},
+  {"componentName":"Arbor.container.PropertyRow","xtype":"mis-property-row","props":{"cls":" mis-clickable","eventListener":{"action":"load-page","url":"/guardians/customer-account-ui/view-payments-on-date/date/2026-09-28/customer-account-id/101"},"value":"£3.65","url":"/guardians/customer-account-ui/view-payments-on-date/date/2026-09-28/customer-account-id/101","fieldLabel":"Monday"}}
+ ]}
+]}]}

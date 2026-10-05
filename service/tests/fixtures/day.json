@@ -1,0 +1,4 @@
+{"type":"slideover","content":[{"componentName":"Arbor.window.Slideover","type":"component","xtype":"mis-slideover","props":{"panelTitle":"Payments - 29 Sep 2026"},"content":[{"componentName":"Arbor.container.Section","type":"component","xtype":"mis-section","props":{"title":"Payments"},"content":[
+ {"componentName":"Arbor.container.PropertyRow","xtype":"mis-property-row","props":{"value":"£1.60","fieldLabel":"pizza veggie £1.60"}},
+ {"componentName":"Arbor.container.PropertyRow","xtype":"mis-property-row","props":{"value":"£2.55","fieldLabel":"Panini £2.55"}}
+]}]}]}

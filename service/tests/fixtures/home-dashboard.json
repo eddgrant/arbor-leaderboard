@@ -1,0 +1,5 @@
+{"type":"page","content":[{"componentName":"Arbor.container.Section","type":"component","props":{"title":"Accounts (All Students)","emptyText":"No accounts found"},"xtype":"mis-section","content":[
+ {"componentName":"Arbor.container.PropertyRow","xtype":"mis-property-row","props":{"url":"/guardians/customer-account-ui/dashboard/customer-account-id/101","value":"<div><div style=\"font-weight:normal\">Child A: Meals</div></div>","description":"Balance: £13.40"}},
+ {"componentName":"Arbor.container.PropertyRow","xtype":"mis-property-row","props":{"url":"/guardians/customer-account-ui/dashboard/customer-account-id/102","value":"<div><div style=\"font-weight:normal\">Child B: Meals</div></div>","description":"Balance: -£1.20"}},
+ {"componentName":"Arbor.container.PropertyRow","xtype":"mis-property-row","props":{"url":"/guardians/customer-account-ui/dashboard/customer-account-id/103","value":"<div>Child A: Clubs</div>"}}
+]}]}
