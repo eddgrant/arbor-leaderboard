@@ -1,0 +1,36 @@
+# Default item categories, used when CATEGORIES_FILE isn't set.
+#
+# Each category becomes a "<Name> this term" sensor per child in Home Assistant, counting the
+# items whose name contains any of its keywords (case-insensitive). An item can count in
+# several categories. A category is either a list of keywords, or an object with `keywords`
+# and an optional Material Design `icon`.
+categories:
+  puddings:
+    icon: mdi:cupcake
+    keywords:
+      - traybake
+      - cupcake
+      - cake
+      - cookie
+      - brownie
+      - muffin
+      - waffle
+      - sweet snack
+      - doughnut
+      - donut
+      - crumble
+      - sponge
+      - pudding
+      - flapjack
+      - croissant
+  drinks:
+    icon: mdi:cup
+    keywords:
+      - milkshake
+      - slush
+      - water
+      - juice
+      - tetra
+      - smoothie
+      - drink
+      - hot chocolate

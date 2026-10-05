@@ -9,6 +9,7 @@ use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Outgoing, QoS};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
+use crate::categories::{Categories, Category};
 use crate::stats::ChildStats;
 
 const DISCOVERY_PREFIX: &str = "homeassistant";
@@ -34,6 +35,17 @@ struct SensorSpec {
     device_class: Option<&'static str>,
     state_class: Option<&'static str>,
     icon: Option<&'static str>,
+}
+
+/// A sensor as published, built from `CHILD_SENSORS` plus one per configured category.
+struct Sensor {
+    key: String,
+    name: String,
+    value_template: String,
+    unit: Option<&'static str>,
+    device_class: Option<&'static str>,
+    state_class: Option<&'static str>,
+    icon: Option<String>,
 }
 
 const CHILD_SENSORS: &[SensorSpec] = &[
@@ -76,22 +88,6 @@ const CHILD_SENSORS: &[SensorSpec] = &[
         device_class: None,
         state_class: Some("measurement"),
         icon: Some("mdi:food"),
-    },
-    SensorSpec {
-        key: "term_puddings",
-        name: "Puddings this term",
-        unit: Some("items"),
-        device_class: None,
-        state_class: Some("measurement"),
-        icon: Some("mdi:cupcake"),
-    },
-    SensorSpec {
-        key: "term_drinks",
-        name: "Drinks this term",
-        unit: Some("items"),
-        device_class: None,
-        state_class: Some("measurement"),
-        icon: Some("mdi:cup"),
     },
     SensorSpec {
         key: "last_purchase_date",
@@ -140,12 +136,18 @@ impl Publisher {
         Ok(publisher)
     }
 
-    pub async fn publish_child(&self, stats: &ChildStats) -> Result<()> {
+    pub async fn publish_child(&self, stats: &ChildStats, categories: &Categories) -> Result<()> {
         let state_topic = format!("{BASE_TOPIC}/{}/state", stats.account_id);
-        for (topic, payload) in child_discovery(stats, &state_topic) {
+        for (topic, payload) in child_discovery(stats, &state_topic, categories) {
             self.publish_retained(&topic, payload.to_string()).await?;
         }
         self.publish_retained(&state_topic, serde_json::to_string(stats)?)
+            .await
+    }
+
+    /// Removes a sensor from Home Assistant, e.g. for a category that's no longer configured.
+    pub async fn remove_child_sensor(&self, account_id: u64, key: &str) -> Result<()> {
+        self.publish_retained(&discovery_topic(account_id, key), String::new())
             .await
     }
 
@@ -192,8 +194,43 @@ impl Publisher {
     }
 }
 
+/// The discovery topic key for a category's sensor, e.g. "term_puddings".
+pub fn category_sensor_key(category: &Category) -> String {
+    format!("term_{}", category.key)
+}
+
+fn child_sensors(categories: &Categories) -> Vec<Sensor> {
+    let fixed = CHILD_SENSORS.iter().map(|s| Sensor {
+        key: s.key.to_string(),
+        name: s.name.to_string(),
+        value_template: format!("{{{{ value_json.{} }}}}", s.key),
+        unit: s.unit,
+        device_class: s.device_class,
+        state_class: s.state_class,
+        icon: s.icon.map(str::to_string),
+    });
+    let per_category = categories.iter().map(|c| Sensor {
+        key: category_sensor_key(c),
+        name: format!("{} this term", c.name),
+        value_template: format!("{{{{ value_json.categories['{}'] }}}}", c.key),
+        unit: Some("items"),
+        device_class: None,
+        state_class: Some("measurement"),
+        icon: Some(c.icon.clone().unwrap_or_else(|| "mdi:tag".into())),
+    });
+    fixed.chain(per_category).collect()
+}
+
+fn discovery_topic(account_id: u64, key: &str) -> String {
+    format!("{DISCOVERY_PREFIX}/sensor/arbor_{account_id}/{key}/config")
+}
+
 /// Discovery messages for one child's sensors, as (topic, payload) pairs.
-fn child_discovery(stats: &ChildStats, state_topic: &str) -> Vec<(String, Value)> {
+fn child_discovery(
+    stats: &ChildStats,
+    state_topic: &str,
+    categories: &Categories,
+) -> Vec<(String, Value)> {
     let node_id = format!("arbor_{}", stats.account_id);
     let device = json!({
         "identifiers": [node_id],
@@ -201,21 +238,21 @@ fn child_discovery(stats: &ChildStats, state_topic: &str) -> Vec<(String, Value)
         "manufacturer": "Arbor Education",
         "model": "Meal account",
     });
-    CHILD_SENSORS
-        .iter()
+    child_sensors(categories)
+        .into_iter()
         .map(|s| {
             let mut payload = json!({
                 "name": s.name,
                 "unique_id": format!("{node_id}_{}", s.key),
                 "state_topic": state_topic,
-                "value_template": format!("{{{{ value_json.{} }}}}", s.key),
+                "value_template": s.value_template,
                 "availability_topic": STATUS_TOPIC,
                 "device": device,
             });
             let fields = [
-                ("unit_of_measurement", s.unit),
-                ("device_class", s.device_class),
-                ("state_class", s.state_class),
+                ("unit_of_measurement", s.unit.map(str::to_string)),
+                ("device_class", s.device_class.map(str::to_string)),
+                ("state_class", s.state_class.map(str::to_string)),
                 ("icon", s.icon),
             ];
             for (field, value) in fields {
@@ -229,8 +266,7 @@ fn child_discovery(stats: &ChildStats, state_topic: &str) -> Vec<(String, Value)
                 payload["json_attributes_template"] =
                     json!("{{ {'items': value_json.last_purchase_items} | tojson }}");
             }
-            let topic = format!("{DISCOVERY_PREFIX}/sensor/{node_id}/{}/config", s.key);
-            (topic, payload)
+            (discovery_topic(stats.account_id, &s.key), payload)
         })
         .collect()
 }
@@ -238,6 +274,10 @@ fn child_discovery(stats: &ChildStats, state_topic: &str) -> Vec<(String, Value)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn categories() -> Categories {
+        Categories::from_yaml("categories:\n  puddings:\n    icon: mdi:cupcake\n    keywords: [cake]\n  pizza: [pizza]\n").unwrap()
+    }
 
     fn stats() -> ChildStats {
         ChildStats {
@@ -248,8 +288,7 @@ mod tests {
             week_spend: 5.2,
             term_spend: 9.35,
             term_items: 5,
-            term_puddings: 2,
-            term_drinks: 1,
+            categories: [("puddings".to_string(), 2), ("pizza".to_string(), 1)].into(),
             last_purchase_date: None,
             last_purchase_items: vec![],
         }
@@ -257,8 +296,8 @@ mod tests {
 
     #[test]
     fn discovery_describes_each_sensor_on_one_device() {
-        let messages = child_discovery(&stats(), "arbor-leaderboard/42/state");
-        assert_eq!(messages.len(), CHILD_SENSORS.len());
+        let messages = child_discovery(&stats(), "arbor-leaderboard/42/state", &categories());
+        assert_eq!(messages.len(), CHILD_SENSORS.len() + 2);
 
         let (topic, balance) = &messages[0];
         assert_eq!(topic, "homeassistant/sensor/arbor_42/balance/config");
@@ -270,6 +309,25 @@ mod tests {
     }
 
     #[test]
+    fn each_category_gets_a_sensor_with_a_stable_id() {
+        let messages = child_discovery(&stats(), "arbor-leaderboard/42/state", &categories());
+        let (topic, puddings) = &messages[CHILD_SENSORS.len()];
+        assert_eq!(topic, "homeassistant/sensor/arbor_42/term_puddings/config");
+        // Same unique_id as before categories were configurable, so existing entities carry on.
+        assert_eq!(puddings["unique_id"], "arbor_42_term_puddings");
+        assert_eq!(puddings["name"], "Puddings this term");
+        assert_eq!(
+            puddings["value_template"],
+            "{{ value_json.categories['puddings'] }}"
+        );
+        assert_eq!(puddings["icon"], "mdi:cupcake");
+
+        let (_, pizza) = &messages[CHILD_SENSORS.len() + 1];
+        assert_eq!(pizza["name"], "Pizza this term");
+        assert_eq!(pizza["icon"], "mdi:tag");
+    }
+
+    #[test]
     fn every_value_template_refers_to_a_state_field() {
         let state = serde_json::to_value(stats()).unwrap();
         for spec in CHILD_SENSORS {
@@ -278,6 +336,9 @@ mod tests {
                 "state has no field {}",
                 spec.key
             );
+        }
+        for category in categories().iter() {
+            assert!(state["categories"].get(&category.key).is_some());
         }
     }
 }
