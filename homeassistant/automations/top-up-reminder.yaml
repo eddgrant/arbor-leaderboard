@@ -1,0 +1,47 @@
+# Weekly reminder of how much to top up each child's Arbor meal account.
+#
+# Lists every child automatically, and is skipped if nobody needs topping up. To use it, go
+# to Settings → Automations & scenes → Create automation → ⋮ → Edit in YAML, paste this in,
+# then change the two marked lines: when to send it, and which phone to send it to.
+
+alias: School lunch top-up reminder
+description: Weekly reminder of each child's Arbor meal account top-up, from arbor-leaderboard.
+mode: single
+triggers:
+  - trigger: time
+    at: "18:00:00" # ← change to when you want the reminder
+conditions:
+  - condition: time
+    weekday: [sun]
+  # Only send it if at least one child needs topping up.
+  - condition: template
+    value_template: >
+      {{ states.sensor
+         | selectattr('entity_id', 'match', 'sensor\.arbor_.+_top_up_needed$')
+         | map(attribute='state') | map('float', 0) | sum > 0 }}
+actions:
+  - variables:
+      lines: >
+        {%- set ns = namespace(lines=[], total=0) %}
+        {%- for s in states.sensor | sort(attribute='entity_id')
+              if s.entity_id is match('sensor\.arbor_.+_top_up_needed$') %}
+        {%- set child = (device_attr(device_id(s.entity_id), 'name') | replace('Arbor ', '')).split(' ')[0] %}
+        {%- set amount = s.state | float(0) %}
+        {%- set ns.total = ns.total + amount %}
+        {%- set ns.lines = ns.lines + [child ~ ': £' ~ ('%.2f' % amount)] %}
+        {%- endfor %}
+        {{ ns.lines | join(', ') }} (total £{{ '%.2f' % ns.total }})
+  # ← change to your phone. Find it in Developer tools → Actions by typing "mobile_app".
+  # notify.mobile_app_* supports the tap-to-open link and priority below; if you'd rather use
+  # notify.send_message with your phone as the target, remove the `data:` block under it.
+  - action: notify.mobile_app_your_phone
+    data:
+      title: "School lunch top-ups 💷"
+      message: "{{ lines | trim }}"
+      data:
+        # Tapping the notification opens Arbor, ready to pay.
+        url: https://login.arbor.sc/ # iOS
+        clickAction: https://login.arbor.sc/ # Android
+        push:
+          interruption-level: time-sensitive # iOS: shows through Focus modes
+        priority: high # Android

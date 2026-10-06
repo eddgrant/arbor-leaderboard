@@ -56,28 +56,9 @@ A separate "Arbor leaderboard" device has a **Last successful fetch** timestamp,
 
 All entities show as unavailable while the service is stopped.
 
-### Example: a weekly top-up reminder
+### Dashboard and weekly reminder
 
-```yaml
-automation:
-  - alias: "School lunch top-up reminder"
-    triggers:
-      - trigger: time
-        at: "18:00:00"
-    conditions:
-      - condition: time
-        weekday: [sun]
-    actions:
-      - action: notify.mobile_app_your_phone
-        data:
-          title: "School lunch top-ups"
-          message: >
-            {% for s in states.sensor if s.entity_id is search('^sensor\.arbor_.+_top_up_needed$') %}
-            {{ s.name }}: £{{ s.state }}{{ ', ' if not loop.last }}
-            {% endfor %}
-```
-
-The [`homeassistant/`](homeassistant/) folder will collect ready-made automations and dashboards.
+The [`homeassistant/`](homeassistant/) folder has a ready-made **School lunches dashboard** and a **weekly top-up reminder** automation, with step-by-step setup instructions. Both find your children and categories automatically, so they work as they are.
 
 ### Categories: puddings, drinks, or anything you like
 
