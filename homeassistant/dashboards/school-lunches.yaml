@@ -43,7 +43,7 @@ views:
         content: |
           {%- set ns = namespace(rows=[]) %}
           {%- for s in states.sensor
-                if s.attributes.unit_of_measurement == 'items'
+                if s.attributes.get('unit_of_measurement') == 'items'
                 and s.entity_id is match('sensor\.arbor_.+_this_term$')
                 and not s.entity_id.endswith('_items_this_term') %}
           {%- set dev = device_attr(device_id(s.entity_id), 'name') %}
@@ -76,7 +76,7 @@ views:
           {% for s in states.sensor | sort(attribute='entity_id')
                if s.entity_id is match('sensor\.arbor_.+_last_purchase$') %}
           {%- set child = (device_attr(device_id(s.entity_id), 'name') | replace('Arbor ', '')).split(' ')[0] %}
-          **{{ child }}** ({{ s.state }}): {{ (s.attributes['items'] or ['nothing']) | join(', ') }}
+          **{{ child }}** ({{ s.state }}): {{ (s.attributes.get('items') or ['nothing']) | join(', ') }}
 
           {% endfor %}
 
