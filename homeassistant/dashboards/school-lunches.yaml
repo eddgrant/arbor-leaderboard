@@ -1,0 +1,92 @@
+# "School lunches" dashboard for arbor-leaderboard.
+#
+# Works as-is for any household: every card finds the children and categories from the
+# arbor-leaderboard sensors, so there's nothing to edit. To use it, create a dashboard
+# (Settings → Dashboards → Add dashboard → New dashboard from scratch), open it, then
+# ✏️ Edit → ⋮ → Raw configuration editor, and paste this file in.
+#
+# Only built-in cards are used, so nothing needs installing from HACS.
+
+title: School lunches
+views:
+  - title: Lunches
+    path: lunches
+    cards:
+      - type: markdown
+        title: 💷 Top-ups needed
+        content: |
+          {%- set ns = namespace(total=0) %}
+          {%- for s in states.sensor | sort(attribute='entity_id')
+                if s.entity_id is match('sensor\.arbor_.+_top_up_needed$') %}
+          {%- set child = (device_attr(device_id(s.entity_id), 'name') | replace('Arbor ', '')).split(' ')[0] %}
+          {%- set ns.total = ns.total + (s.state | float(0)) %}
+          - **{{ child }}**: £{{ '%.2f' % (s.state | float(0)) }}
+          {%- endfor %}
+
+          **Total: £{{ '%.2f' % ns.total }}**
+
+          {% set fetched = as_timestamp(states('sensor.arbor_leaderboard_last_successful_fetch'), none) %}
+          {%- if fetched %}<small>Arbor last checked {{ fetched | timestamp_custom('%a %-d %b, %H:%M') }}</small>{% endif %}
+
+      - type: markdown
+        title: Balances
+        content: |
+          {%- for s in states.sensor | sort(attribute='entity_id')
+                if s.entity_id is match('sensor\.arbor_.+_balance$') %}
+          {%- set child = (device_attr(device_id(s.entity_id), 'name') | replace('Arbor ', '')).split(' ')[0] %}
+          {%- set balance = s.state | float(0) %}
+          - **{{ child }}**: {{ '⚠️ ' if balance < 0 }}£{{ '%.2f' % balance }} (spent £{{ '%.2f' % (states(s.entity_id | replace('_balance', '_spend_this_week')) | float(0)) }} this week)
+          {%- endfor %}
+
+      - type: markdown
+        title: 🏆 Leaderboard (this term)
+        content: |
+          {%- set ns = namespace(rows=[]) %}
+          {%- for s in states.sensor
+                if s.attributes.unit_of_measurement == 'items'
+                and s.entity_id is match('sensor\.arbor_.+_this_term$')
+                and not s.entity_id.endswith('_items_this_term') %}
+          {%- set dev = device_attr(device_id(s.entity_id), 'name') %}
+          {%- set ns.rows = ns.rows + [{
+               'category': s.name | replace(dev ~ ' ', '') | replace(' this term', ''),
+               'child': (dev | replace('Arbor ', '')).split(' ')[0],
+               'count': s.state | int(0)}] %}
+          {%- endfor %}
+          {%- for category, rows in ns.rows | groupby('category') %}
+          **{{ category }}**
+          {% for r in rows | sort(attribute='count', reverse=true) %}
+          {{ loop.index }}. {{ r.child }}: {{ r.count }}
+          {%- endfor %}
+
+          {% endfor %}
+          {%- set ns2 = namespace(rows=[]) %}
+          {%- for s in states.sensor if s.entity_id is match('sensor\.arbor_.+_spend_this_term$') %}
+          {%- set ns2.rows = ns2.rows + [{
+               'child': (device_attr(device_id(s.entity_id), 'name') | replace('Arbor ', '')).split(' ')[0],
+               'spend': s.state | float(0)}] %}
+          {%- endfor %}
+          **💸 Biggest spender**
+          {% for r in ns2.rows | sort(attribute='spend', reverse=true) %}
+          {{ loop.index }}. {{ r.child }}: £{{ '%.2f' % r.spend }}
+          {%- endfor %}
+
+      - type: markdown
+        title: 🍽️ Last school day
+        content: |
+          {% for s in states.sensor | sort(attribute='entity_id')
+               if s.entity_id is match('sensor\.arbor_.+_last_purchase$') %}
+          {%- set child = (device_attr(device_id(s.entity_id), 'name') | replace('Arbor ', '')).split(' ')[0] %}
+          **{{ child }}** ({{ s.state }}): {{ (s.attributes['items'] or ['nothing']) | join(', ') }}
+
+          {% endfor %}
+
+      # A chart card needs its entities listed, so this one is the exception: replace the
+      # entity IDs with your children's "Spend this week" sensors (one line each).
+      - type: statistics-graph
+        title: Spend per week
+        chart_type: bar
+        period: week
+        stat_types: [max]
+        entities:
+          - sensor.arbor_first_child_spend_this_week
+          - sensor.arbor_second_child_spend_this_week
