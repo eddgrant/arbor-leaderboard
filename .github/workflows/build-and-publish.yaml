@@ -71,7 +71,7 @@ jobs:
 
       - name: Determine semantic version
         id: semver
-        uses: paulhatch/semantic-version@v6.0.4
+        uses: paulhatch/semantic-version@v6.0.5
         with:
           bump_each_commit: true
           version_format: ${{ env.version_format }}
