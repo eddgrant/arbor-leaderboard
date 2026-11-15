@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Outgoing, QoS};
+use rumqttc::{
+    AsyncClient, ConnectReturnCode, Event, LastWill, MqttOptions, Outgoing, Packet, QoS,
+};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -115,10 +117,26 @@ impl Publisher {
         let (client, mut event_loop) = AsyncClient::new(options, 64);
 
         // rumqttc only makes progress while its event loop is polled, and reconnects on its own.
+        // Each time it (re)connects, announce "online": if the connection dropped, the broker
+        // has published the "offline" last will, and Home Assistant shows every entity as
+        // unavailable until "online" is published again.
+        let status_client = client.clone();
         let event_loop = tokio::spawn(async move {
             loop {
                 match event_loop.poll().await {
                     Ok(Event::Outgoing(Outgoing::Disconnect)) => break,
+                    Ok(event) if is_connected(&event) => {
+                        // try_publish, not publish: this task drains the request queue, so
+                        // awaiting space in it here could deadlock.
+                        if let Err(e) = status_client.try_publish(
+                            STATUS_TOPIC,
+                            QoS::AtLeastOnce,
+                            true,
+                            "online",
+                        ) {
+                            tracing::warn!(error = %e, "couldn't queue MQTT online status");
+                        }
+                    }
                     Ok(_) => {}
                     Err(e) => {
                         tracing::warn!(error = %e, "MQTT connection error; retrying");
@@ -129,9 +147,6 @@ impl Publisher {
         });
 
         let publisher = Self { client, event_loop };
-        publisher
-            .publish_retained(STATUS_TOPIC, "online".into())
-            .await?;
         publisher.publish_service_discovery().await?;
         Ok(publisher)
     }
@@ -192,6 +207,11 @@ impl Publisher {
             .await?;
         Ok(())
     }
+}
+
+/// Whether the event is the broker accepting a connection, including after a reconnect.
+fn is_connected(event: &Event) -> bool {
+    matches!(event, Event::Incoming(Packet::ConnAck(ack)) if ack.code == ConnectReturnCode::Success)
 }
 
 /// The discovery topic key for a category's sensor, e.g. "term_puddings".
@@ -292,6 +312,16 @@ mod tests {
             last_purchase_date: None,
             last_purchase_items: vec![],
         }
+    }
+
+    #[test]
+    fn only_an_accepted_connection_counts_as_connected() {
+        use rumqttc::ConnAck;
+        let connack = |code| Event::Incoming(Packet::ConnAck(ConnAck::new(code, false)));
+        assert!(is_connected(&connack(ConnectReturnCode::Success)));
+        assert!(!is_connected(&connack(ConnectReturnCode::NotAuthorized)));
+        assert!(!is_connected(&Event::Incoming(Packet::PingResp)));
+        assert!(!is_connected(&Event::Outgoing(Outgoing::PingReq)));
     }
 
     #[test]
